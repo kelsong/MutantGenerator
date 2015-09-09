@@ -130,7 +130,7 @@ sub new {
     $self->{_op} = undef;
     $self->{_lhs} = undef;
     $self->{_rhs} = undef;
-    $self->{_nosteal} = false;
+    $self->{_nosteal} = 0;
     bless $self, $class;
     return $self;
 }
@@ -193,7 +193,7 @@ sub setOp(){
 
 sub setNoSteal(){
     my $self = shift;
-    $self->{_nosteal} = true;
+    $self->{_nosteal} = 1;
 }
 
 sub noSteal(){
@@ -208,10 +208,16 @@ sub print{
 	print ' <= ';
     } elsif ($self->{_op} eq 'blk_assign'){
 	print ' = ';
+    } elsif ($self->{_op} eq '[]') {
+	print '['
     } else {
 	print ' ', $self->{_op}, ' ';
     }
     $self->{_rhs}->print();
+    
+    if($self->{_op} eq '[]'){
+	print ']';
+    }
 }
 
 ####################################################################
@@ -227,7 +233,7 @@ sub new {
     my $self = $class->SUPER::new($super_fileline, $super_mutation);
     $self->{_op} = undef;
     $self->{_rhs} = undef;
-    $self->{_nosteal} = false;
+    $self->{_nosteal} = 0;
     bless $self, $class;
     return $self;
 }
@@ -275,7 +281,7 @@ sub getOp {
 #TODO
 sub print(){
     my $self = shift;
-    if($self->{_op} == "()"){
+    if($self->{_op} == '()'){
 	print "(";
 	$self->{_rhs}->print();
 	print ")";
@@ -292,7 +298,12 @@ sub setOp(){
 
 sub setNoSteal(){
     my $self = shift;
-    $self->{_nosteal} = true;
+    $self->{_nosteal} = 1;
+}
+
+sub setSteal(){
+    my $self = shift;
+    $self->{_nosteal} = 0;
 }
 
 sub noSteal(){
@@ -315,7 +326,7 @@ sub new {
     $self->{_lhs} = undef;
     $self->{_rhs} = undef;
     $self->{_ths} = undef;
-    $self->{_nosteal} = false;
+    $self->{_nosteal} = 0;
     bless $self, $class;
     return $self;
 }
@@ -379,7 +390,12 @@ sub print {
 
 sub setNoSteal(){
     my $self = shift;
-    $self->{_nosteal} = true;
+    $self->{_nosteal} = 1;
+}
+
+sub setSteal(){
+    my $self = shift;
+    $self->{_nosteal} = 0;
 }
 
 sub noSteal(){
@@ -427,7 +443,7 @@ sub type {
 #TODO
 sub print {
     my $self = shift;
-    #print $self->{_type}, " ", $self->{_width}, " ", $self->{_lvalue}, "\n";
+    print $self->{_type}, " ", $self->{_width}, " ", $self->{_lvalue}, "\n";
     if($self->{_type} eq 'bin'){
 	if($self->{_width} != 0){
 	    printf "%u'b%.*b", $self->{_width}, $self->{_width}, $self->{_lvalue};
@@ -537,7 +553,8 @@ sub print {
 package AstBuilder;
 use Switch;
 use Carp;
-#this is the primary worker. It builds the AST and enforces rules of recognition. All callbacks pass their tokens up to the builder. 
+#this is the primary worker. It builds the AST and enforces rules of recognition. 
+#All callbacks pass their tokens up to the builder. 
 #base rules 
 # if statements
 # switch statement
@@ -771,7 +788,7 @@ sub accept_token {
 	    #gets the assigning expression and the terminating condition
 	    if($token_type eq 'OPERATOR'){
 		if($token eq ';'){
-		     printf "FOUND SEQ NON-BLOCKING ASSIGN STATEMENT\n";
+		     #printf "FOUND SEQ NON-BLOCKING ASSIGN STATEMENT\n";
 		     $self->{_state} = START;
 		     $self->{_num_assign}++;
 		     #clear current expr
@@ -824,11 +841,16 @@ sub parse_expr {
     my $node;
     #this is to deal with spanning operators such as '(EXPR)' or ?: 
     # NOT CURRENTLY IMPLEMENTED TODO: COMPLETE THIS 
-    state $triop_state;
-    state $triop_complete_char;
+    state $triop_state = 'none';
     state $uniop_state = 'none';
-    state $uniop_open_count;
-    state $uniop_close_char;
+    state $uniop_open_count = 0;
+    state $bitri_state = 'none';
+
+    if($token eq ':' && $triop_state neq 'none') {
+	$token_type = 'TRIOP';
+    }
+
+    my $stack_empty = !(defined @{$self->{_stack}});
     
     if($token_type eq 'NUMBER' || $token_type eq 'SYMBOL' || $token_type eq 'PREPROC'){
 	#create number or Symbol AST Node and push onto the stack
@@ -844,8 +866,7 @@ sub parse_expr {
 	    $node = $self->build_ast_node($token, $fileline, 'CONST');
 	}
 	
-        
-	if( !(defined @{$self->{_stack}}) ){
+	if( $stack_empty ){
 	    push @{$self->{_stack}}, $node;
 	} elsif($self->{_stack}[-1]->type() eq AstType::BINARYOP){
 	    if ($self->{_stack}[-1]->isComplete() == 0){
@@ -873,6 +894,10 @@ sub parse_expr {
 	#most importantly, order of operations "steals" rhs of previous nodes unless locked by parenthesis
 	
 	my $op_type = AstType->getOpType($token);
+	#special case hack
+	if($token eq ':' && $triop_state neq 'none'){
+	    $op_type == 'TRIOP';
+	}
 	#check the type of operator
 	switch($op_type) {
 	    case 'BIOP' {
@@ -883,13 +908,13 @@ sub parse_expr {
 		#push onto stack
 		$node = $self->build_ast_node($token, $fileline, 'BIOP');
 		$node->setOp($token);
-		my $stack_size = @{$self->{_stack}};
-		if($stack_size == 0){
+
+		if($stack_empty){
 		    push @{$self->{_stack}}, $node;
 		} else {
 		    my $type = $self->{_stack}[-1]->type();
 		    if($type eq AstType::UNARYOP || $type eq AstType::BINARYOP || $type eq AstType::TRINARYOP){
-			if($self->has_precedence($node, $self->{_stack}[-1])){
+			if($self->has_precedence($node, $self->{_stack}[-1]) && !($self->{_stack}[-1]->noSteal()) ){
 			    #steal
 			    my $temp = $self->{_stack}[-1]->stealOperand();
 			    $node->setRHS($temp);
@@ -910,29 +935,98 @@ sub parse_expr {
 		    if($token eq '('){
 			#change state
 			$uniop_state = 'wait_paren';
-			if()
+			$uniop_open_count++;
+		        if( !$stack_empty ){
+			    $self->{_stack}[-1]->setNoSteal();
+			}
 		    } elsif ($token eq '~' || $token eq '!'){
+			#build a node as normal
+		        $node = $self->build_ast_node($token, $fileline, 'UNIOP');
+			push @{$self->{_stack}}, $node;
 		    } else {
 			#FAIL
+			croak "Bad formation of Uniop $token at $fileline"; 
 		    }
 		} elsif(($uniop_state eq 'wait_paren')){
 		    if($token eq ')'){
+			#create the paren node
+			$uniop_open_count--;
+			$node = $self->build_ast_node('()', $fileline, 'UNIOP');
+			$node->setRHS($self->{_stack}[-1]);
+			pop @{$self->{_stack}[-1]}
+			if(!(defined @{$self->{_stack}} && nested_paren_counter == 0;)){
+			    $self->{_stack}[-1]->setSteal():
+			}
+			push @{$self->{_stack}}, $node;
 		    } elsif ($token eq '~' || $token eq '!'){
-		    } else {
-			#FAIL
+			  $node = $self->build_ast_node($token, $fileline, 'UNIOP');
+		    } elsif($token eq '(')
+			$uniop_open_count++;
+		        if( !$stack_empty ){
+			    $self->{_stack}[-1]->setNoSteal();
+			}
 		    }
 		} 
 		
-	    } case 'TRIOP' { #multi-part operators often... need state recognition for this
-		
+	    } case 'TRIOP' { #multi-part operators
+		if($triop_state eq 'none' && $token eq '?'){
+		    $triop_state = 'wait_colon';
+		} elsif ($triop_state eq 'wait_colon' && $token eq ':') {
+		    $triop_state = 'none';
+		    $node = $self->build_ast_node('?:', $fileline, 'TRIOP');
+		    $node->setRHS($self->{_stack}[-1]);
+		    pop @{$self->{_stack}};
+		    $node->setLHS($self->{_stack}[-1]);
+		    pop @{$self->{_stack}};
+		    $triop_state = 'none';
+		} else {
+		    croak 'Invalid triop token';
+		}
+	  
 	    } case 'BI-UNI' {
 		#contextual information determines if the operator is a biop or uniop
 		#e.g. negative signs
+		if($stack_empty) {
+		    #must be biop
+		    $node = $self->build_ast_node($token, $fileline, 'UNIOP');
+		    push @{$self->{_stack}}, $node;
+		} elsif($self->{_stack}[-1]->type() eq AstType::BINARYOP ||
+		   $self->{_stack}[-1]->type() eq AstType::TRINARYOP || 
+		   $self->{_stack}[-1]->type() eq AstType::UNARYOP)
+		{
+		    #contextual
+		} else {
+		    #is a biop
+		}
 		
 	    } case 'BI-TRI' {
 		#select operators
 		#based on the number of arguments taken
-		if($token eq ']')
+		if($token eq  '['){
+		    $bitri_state = 'bitri_found';
+		} elsif($bitri_state eq 'bitri_found' && $token eq ':') {
+		    $bitri_state = 'triop_found';
+		} elsif($bitri_state eq 'bitri_found' && $token eq ']'){
+		    #create biop
+		    $node = $self->build_ast_node('[]', $fileline, 'BIOP');
+		    $node->setRHS($self->{_stack}[-1]);
+		    pop @{$self->{_stack}};
+		    $node->setLHS($self->{_stack}[-1]);
+		    pop @{$self->{_stack}};
+		    push @{$self->{_stack}}, $node;
+		} elsif ($bitri_state eq 'triop_found' && $token eq ']'){
+		    #create triop
+		    $node = $self->build_ast_node('[:]', $fileline, 'TRIOP');
+		    $node->setTHS($self->{_stack}[-1]);
+		    pop @{$self->{_stack}};
+		    $node->setRHS($self->{_stack}[-1]);
+		    pop @{$self->{_stack}};
+		    $node->setLHS($self->{_stack}[-1]);
+		    pop @{$self->{_stack}};
+		    push @{$self->{_stack}}, $node;
+		} else {
+		    croak 'Invalid biop or triop construction\n';
+		}
 	    }
 	}
     } 
@@ -955,7 +1049,6 @@ sub has_precedence {
     } else {
 	return 0;
     }
-
 }
 
 sub clear_expr {
@@ -1030,7 +1123,7 @@ sub parse_num {
 	    $ret[0] = oct($width);
 	} 
 	if ($type eq '\'b') {
-	    $ret[1] = oct($value);
+	    $ret[1] = oct('0b'.$value);
 	    $ret[2] = 'BIN';
 	} elsif ($type eq '\'h') {
 	    $value = '0x'.$value;
