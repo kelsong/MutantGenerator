@@ -252,7 +252,7 @@ sub isComplete {
 }
 
 sub setRHS {
-    my $self = shift;
+    my $self = shift; 
     $self->{_rhs} = shift;
 }
 
@@ -846,10 +846,6 @@ sub parse_expr {
     state $uniop_open_count = 0;
     state $bitri_state = 'none';
 
-    if($token eq ':' && $triop_state neq 'none') {
-	$token_type = 'TRIOP';
-    }
-
     my $stack_empty = !(defined @{$self->{_stack}});
     
     if($token_type eq 'NUMBER' || $token_type eq 'SYMBOL' || $token_type eq 'PREPROC'){
@@ -895,7 +891,7 @@ sub parse_expr {
 	
 	my $op_type = AstType->getOpType($token);
 	#special case hack
-	if($token eq ':' && $triop_state neq 'none'){
+	if($token eq ':' && $triop_state ne 'none'){
 	    $op_type == 'TRIOP';
 	}
 	#check the type of operator
@@ -954,7 +950,7 @@ sub parse_expr {
 			$node = $self->build_ast_node('()', $fileline, 'UNIOP');
 			$node->setRHS($self->{_stack}[-1]);
 			pop @{$self->{_stack}[-1]}
-			if(!(defined @{$self->{_stack}} && nested_paren_counter == 0;)){
+			if(!(defined @{$self->{_stack}} && $nested_paren_counter == 0;)){
 			    $self->{_stack}[-1]->setSteal():
 			}
 			push @{$self->{_stack}}, $node;
@@ -982,7 +978,6 @@ sub parse_expr {
 		} else {
 		    croak 'Invalid triop token';
 		}
-	  
 	    } case 'BI-UNI' {
 		#contextual information determines if the operator is a biop or uniop
 		#e.g. negative signs
